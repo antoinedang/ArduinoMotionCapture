@@ -14,12 +14,11 @@
 #include "esp_http_server.h"
 #include "esp_timer.h"
 #include "esp_camera.h"
+#include "global_vars.h"
 #include "img_converters.h"
 #include "fb_gfx.h"
 #include "driver/ledc.h"
 #include "cJSON.h"
-
-#define BOOLEAN_KEY 73
 
 #include "sdkconfig.h"
 
@@ -259,8 +258,12 @@ const char index_web[] =
   </head>\
   <body>\
     <br>\
-    <h1>HummingVision v1.0</h1>\
+    <h1>HummingVision v2.0</h1>\
     <br>\
+    <label for=\"sensitivity\">Sensitivity (after _ seconds of detecting motion take a photo):</label>\
+    <input type=\"range\" id=\"sensitivity\" name=\"sensitivity\" min=\"0.5\" max=\"25\" step=\"0.5\" value=\"10\" oninput=\"updateText()\">\
+    <br>\
+    <input type=\"text\" id=\"sensitivityTextInput\" name=\"sensitivityTextInput\" value=\"10\" onchange=\"updateSlider()\">\
     <label for=\"brightness\">Brightness:</label>\
     <input type=\"range\" id=\"brightness\" name=\"brightness\" min=\"-2\" max=\"2\" step=\"1\" value=\"0\">\
     <label for=\"contrast\">Contrast:</label>\
@@ -275,6 +278,22 @@ const char index_web[] =
     <br>\
     <img id=\"videoStream\" src=\"\"/>\
     <script>\
+      function updateText() {\
+          var slider = document.getElementById(\"sensitivity\");\
+          var inputBox = document.getElementById(\"sensitivityTextInput\");\
+          inputBox.value = slider.value;\
+      }\
+      function updateSlider() {\
+          var slider = document.getElementById(\"sensitivity\");\
+          var inputBox = document.getElementById(\"sensitivityTextInput\");\
+          var value = parseFloat(inputBox.value);\
+          if (!isNaN(value) && value >= parseFloat(slider.min) && value <= parseFloat(slider.max)) {\
+              slider.value = value;\
+              sendRequest(\"sensitivity\", value);\
+          } else {\
+              inputBox.value = slider.value;\
+          }\
+      }\
       document.addEventListener('DOMContentLoaded', function (event) {\
         var baseHost = document.location.origin;\
         const videoStream = document.getElementById('videoStream');\
@@ -292,6 +311,9 @@ const char index_web[] =
           .then(data => {\
             sliders.forEach(slider => {\
               slider.value = data[slider.name];\
+              if (slider.name == \"sensitivity\") {\
+                updateText();\
+              }\
             });\
           })\
           .catch(error => {\
@@ -348,6 +370,7 @@ static esp_err_t settings_handler(httpd_req_t *req) {
   cJSON_AddNumberToObject(jsonRoot, "contrast", s->status.contrast);
   cJSON_AddNumberToObject(jsonRoot, "exposure", s->status.gainceiling);
   cJSON_AddNumberToObject(jsonRoot, "saturation", s->status.saturation);
+  cJSON_AddNumberToObject(jsonRoot, "sensitivity", ((float) sensitivity) / 2.0);
 
   char *jsonStr = cJSON_Print(jsonRoot);
   cJSON_Delete(jsonRoot);
@@ -388,6 +411,10 @@ static esp_err_t cmd_handler(httpd_req_t *req) {
     res = s->set_saturation(s, val); // -2 to 2
   else if (!strcmp(variable, "exposure"))
     res = s->set_gainceiling(s, (gainceiling_t)val); // 0 to 6
+  else if (!strcmp(variable, "sensitivity"))
+    res = 0;
+    float fval = atof(value);
+    sensitivity = (int) (2.0 * fval); // 1 to inf.
 
 
   if (res < 0) {

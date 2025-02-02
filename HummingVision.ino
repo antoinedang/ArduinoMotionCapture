@@ -1,4 +1,5 @@
 #include "esp_camera.h"
+#include "global_vars.h"
 #include <WiFi.h>
 #include <ESP_Mail_Client.h>
 #include <HTTPClient.h>
@@ -6,8 +7,8 @@
 #include <FS.h>
 #include <EEPROM.h>
 #include <TimeLib.h>
-#define EEPROM_SIZE 6
-#define BOOLEAN_KEY 74
+#define EEPROM_SIZE 10
+#define BOOLEAN_KEY 69
 #define CAMERA_MODEL_WROVER_KIT
 #define LED_BUILTIN 2
 #define PIR_GPIO 13
@@ -20,7 +21,6 @@ int frame_count = 0;
 
 bool is_daytime;
 int numSequentialMotionDetections = 0;
-#define numSequentialMotionDetectionsToTrigger 3
 int cam_contrast;
 int cam_brightness;
 int cam_exposure;
@@ -42,11 +42,11 @@ void smtpCallback(SMTP_Status status);
 Session_Config smtp_config;
 
 // FOR WIFI
-// #define ssid_Router "JKLM"
-// #define password_Router "9494990303"
+#define ssid_Router "JKLM"
+#define password_Router "9494990303"
 
-#define ssid_Router "BELL 2.4"
-#define password_Router "123456789"
+// #define ssid_Router "BELL 2.4"
+// #define password_Router "123456789"
 
 void connectToWifi() {
   WiFi.begin(ssid_Router, password_Router);
@@ -283,6 +283,57 @@ bool isDaytime() {
   http.end();
 }
 
+void checkIPForStartupEmail() {
+  int previousWebsiteIP_el0 = EEPROM.read(1);
+  int previousWebsiteIP_el1 = EEPROM.read(7);
+  int previousWebsiteIP_el2 = EEPROM.read(8);
+  int previousWebsiteIP_el3 = EEPROM.read(9);
+  String websiteIP = WiFi.localIP().toString();
+  String currentWebsiteIP_el0 = "";
+  String currentWebsiteIP_el1 = "";
+  String currentWebsiteIP_el2 = "";
+  String currentWebsiteIP_el3 = "";
+  int el_i = 0;
+  for (int i = 0; i < websiteIP.length(); ++i) {
+      if (websiteIP[i] != '.') {
+        if (el_i == 0) {
+          currentWebsiteIP_el0 += websiteIP[i];
+        } else if (el_i == 1) {
+          currentWebsiteIP_el1 += websiteIP[i];
+        } else if (el_i == 2) {
+          currentWebsiteIP_el2 += websiteIP[i];
+        } else if (el_i == 3) {
+          currentWebsiteIP_el3 += websiteIP[i];
+        }
+      } else {
+        el_i += 1;
+      }
+  }
+
+  Serial.print((uint8_t)currentWebsiteIP_el0.toInt());
+  Serial.print(".");
+  Serial.print((uint8_t)currentWebsiteIP_el1.toInt());
+  Serial.print(".");
+  Serial.print((uint8_t)currentWebsiteIP_el2.toInt());
+  Serial.print(".");
+  Serial.println((uint8_t)currentWebsiteIP_el3.toInt());
+  
+  Serial.print((uint8_t)previousWebsiteIP_el0);
+  Serial.print(".");
+  Serial.print((uint8_t)previousWebsiteIP_el1);
+  Serial.print(".");
+  Serial.print((uint8_t)previousWebsiteIP_el2);
+  Serial.print(".");
+  Serial.println((uint8_t)previousWebsiteIP_el3);
+
+  if (previousWebsiteIP_el0 != currentWebsiteIP_el0.toInt() || previousWebsiteIP_el1 != currentWebsiteIP_el1.toInt() || previousWebsiteIP_el2 != currentWebsiteIP_el2.toInt() || previousWebsiteIP_el3 != currentWebsiteIP_el3.toInt()) sendStartupEmail(WiFi.localIP().toString());
+  EEPROM.write(1, (uint8_t)currentWebsiteIP_el0.toInt());
+  EEPROM.write(7, (uint8_t)currentWebsiteIP_el1.toInt());
+  EEPROM.write(8, (uint8_t)currentWebsiteIP_el2.toInt());
+  EEPROM.write(9, (uint8_t)currentWebsiteIP_el3.toInt());
+  EEPROM.commit();
+}
+
 void setup() {
   try {
     Serial.begin(115200);
@@ -302,16 +353,14 @@ void setup() {
     }
     EEPROM.begin(EEPROM_SIZE);
     initCamera();
+    sensitivity = EEPROM.read(6);
     connectToWifi();
     startCameraServer();
     MailClient.networkReconnect(true);
     connectToEmail();
-    int previousWebsiteIP = EEPROM.read(0);
-    String currentWebsiteIP = WiFi.localIP().toString();
-    currentWebsiteIP.remove('.');
-    if (previousWebsiteIP != currentWebsiteIP.toInt()) sendStartupEmail(WiFi.localIP().toString());
-    EEPROM.write(0, currentWebsiteIP.toInt());
-    EEPROM.commit();
+    
+    checkIPForStartupEmail();
+
     is_daytime = isDaytime();
     Serial.print("isDaytime: ");
     Serial.println(is_daytime);
@@ -336,19 +385,22 @@ void loop() {
       lastDaytimeUpdateMillis = millis();
     }
 
+    EEPROM.write(6, (uint8_t)sensitivity);
+    EEPROM.commit();
     if (!is_daytime) {
-      Serial.print("+");
+      Serial.print("x");
     } else {
-      Serial.print("<>");
-      if (digitalRead(PIR_GPIO) == HIGH && digitalRead(SECONDARY_PIR_GPIO) == HIGH) {
+      Serial.print("o");
+      if (digitalRead(PIR_GPIO) == HIGH || digitalRead(SECONDARY_PIR_GPIO) == HIGH) {
         numSequentialMotionDetections = numSequentialMotionDetections + 1;
         digitalWrite(LED_BUILTIN, HIGH);  // turn the LED on
-        delay(100);
+        delay(10);
         digitalWrite(LED_BUILTIN, LOW);   // turn the LED off
+        delay(90);
       } else {
         numSequentialMotionDetections = 0;
       }
-      if (numSequentialMotionDetections >= numSequentialMotionDetectionsToTrigger) {
+      if (numSequentialMotionDetections >= sensitivity) {
         digitalWrite(LED_BUILTIN, HIGH);  // turn the LED on
         saveCaptureToFileSystem();        // capture hummingbird content
         if (frame_count > 0) sendCaptureByEmail();             // send hummingbird content as attachment in email
@@ -356,7 +408,7 @@ void loop() {
         numSequentialMotionDetections = 0;
       }
     }
-    delay(500);
+    delay(400);
   } catch (const char* errorMessage) {
     // Handle the exception
     Serial.print("Exception caught in loop: ");
@@ -401,12 +453,19 @@ void initCamera() {
   }
   
   sensor_t* s = esp_camera_sensor_get();
-  if (EEPROM.read(1) != BOOLEAN_KEY) {
-    EEPROM.write(1, BOOLEAN_KEY);
+  Serial.print("EEPROM @ 0: ");
+  Serial.println(EEPROM.read(0));
+  if (EEPROM.read(0) != (uint8_t)BOOLEAN_KEY) {
+    EEPROM.write(0, (uint8_t)BOOLEAN_KEY);
+    EEPROM.write(1, 0);
+    EEPROM.write(7, 0);
+    EEPROM.write(8, 0);
+    EEPROM.write(9, 0);
     EEPROM.write(5, (uint8_t)s->status.gainceiling);
     EEPROM.write(4, (uint8_t)(s->status.saturation+10));
     EEPROM.write(3, (uint8_t)(s->status.brightness+10));
     EEPROM.write(2, (uint8_t)(s->status.contrast+10));
+    EEPROM.write(6, (uint8_t)sensitivity);
     EEPROM.commit();
   } else {
     s->set_contrast(s, ((int)EEPROM.read(2))-10);
